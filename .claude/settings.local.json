@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lsof:*)",
+      "Bash(true)",
+      "Bash(printenv)",
+      "Bash(kill:*)",
+      "Bash(npm run dev:*)"
+    ],
+    "deny": []
+  }
+}
