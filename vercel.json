@@ -1,14 +1,1 @@
-{
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/next"
-    }
-  ],
-  "env": {
-    "NEXTAUTH_SECRET": "@nextauth-secret",
-    "NEXTAUTH_URL": "@nextauth-url", 
-    "OPENROUTER_API_KEY": "@openrouter-api-key",
-    "DATABASE_URL": "@database-url"
-  }
-}
+{}
