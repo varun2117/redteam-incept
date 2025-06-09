@@ -33,7 +33,7 @@ A comprehensive web application for autonomous LLM security testing and vulnerab
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+
    cd Red_agent
    ```
 
