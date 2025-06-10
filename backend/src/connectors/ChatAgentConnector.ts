@@ -165,9 +165,13 @@ export class ChatAgentConnector {
       baseData.context = context;
     }
 
-    // Add default model for Test Agents compatibility
-    if (!baseData.model) {
-      baseData.model = 'meta-llama/llama-4-scout';
+    // Extract model from URL if it contains model parameter, otherwise use default
+    try {
+      const url = new URL(this.config.url);
+      const modelFromUrl = url.searchParams.get('model');
+      baseData.model = modelFromUrl || 'openai/gpt-4o-mini';
+    } catch {
+      baseData.model = 'openai/gpt-4o-mini';
     }
 
     // Handle different request formats

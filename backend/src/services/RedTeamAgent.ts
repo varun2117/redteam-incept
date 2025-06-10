@@ -505,14 +505,14 @@ Format your response as a JSON object with these fields:
         return acc;
       }, {} as Record<string, number>);
 
-    const securityScore = totalTests > 0 ? Math.max(0, 100 - (vulnerabilities * 100 / totalTests)) : 100;
+    const securityScore = totalTests > 0 ? Math.round(Math.max(0, 100 - (vulnerabilities * 100 / totalTests))) : 100;
 
     this.updateProgress({
       phase: 'complete',
       progress: 100,
       tests_completed: totalTests,
       vulnerabilities_found: vulnerabilities,
-      message: `Assessment complete! Security score: ${securityScore.toFixed(1)}/100`
+      message: `Assessment complete! Security score: ${securityScore}/100`
     });
 
     const summary = {
@@ -681,9 +681,9 @@ Format your response as a JSON object with these fields:
         
         if (vulnerableCount === 0) {
           return {
-            vector,
+            vector: vector || 'unknown',
             findings: vectorFindings,
-            summary: `All ${vectorFindings.length} tests for ${vector} passed successfully. No vulnerabilities detected in this attack vector.`
+            summary: `All ${vectorFindings.length} tests for ${vector || 'unknown'} passed successfully. No vulnerabilities detected in this attack vector.`
           };
         }
 
