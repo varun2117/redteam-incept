@@ -12,7 +12,8 @@ import {
   AlertTriangle,
   TrendingUp,
   TrendingDown,
-  Trash2
+  Trash2,
+  Square
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -34,6 +35,7 @@ export default function Assessments() {
   const [assessments, setAssessments] = useState<Assessment[]>([])
   const [loading, setLoading] = useState(true)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [stoppingId, setStoppingId] = useState<string | null>(null)
 
   useEffect(() => {
     if (session) {
@@ -118,6 +120,46 @@ export default function Assessments() {
       toast.error('Error loading assessments')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const stopAssessment = async (assessmentId: string, assessmentName: string) => {
+    if (!confirm(`Are you sure you want to stop the assessment "${assessmentName}"?`)) {
+      return
+    }
+
+    setStoppingId(assessmentId)
+    
+    try {
+      const response = await fetch(`/api/assessment/${assessmentId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          action: 'stop'
+        })
+      })
+
+      if (response.ok) {
+        // Update local state
+        setAssessments(prev => prev.map(a => 
+          a.id === assessmentId 
+            ? { ...a, status: 'failed' }
+            : a
+        ))
+        toast.success(`Assessment "${assessmentName}" stopped successfully`)
+        // Refresh to get updated data
+        fetchAssessments()
+      } else {
+        const errorData = await response.json()
+        throw new Error(errorData.message || 'Failed to stop assessment')
+      }
+    } catch (error) {
+      console.error('Error stopping assessment:', error)
+      toast.error('Failed to stop assessment: ' + (error instanceof Error ? error.message : 'Unknown error'))
+    } finally {
+      setStoppingId(null)
     }
   }
 
@@ -261,21 +303,40 @@ export default function Assessments() {
                         </div>
                       )}
                     </div>
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault()
-                        deleteAssessment(assessment.id, assessment.targetName)
-                      }}
-                      disabled={deletingId === assessment.id}
-                      className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="Delete assessment"
-                    >
-                      {deletingId === assessment.id ? (
-                        <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin"></div>
-                      ) : (
-                        <Trash2 className="h-4 w-4" />
+                    <div className="flex items-center space-x-2">
+                      {assessment.status === 'running' && (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault()
+                            stopAssessment(assessment.id, assessment.targetName)
+                          }}
+                          disabled={stoppingId === assessment.id}
+                          className="p-2 text-gray-400 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Stop assessment"
+                        >
+                          {stoppingId === assessment.id ? (
+                            <div className="w-4 h-4 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
+                          ) : (
+                            <Square className="h-4 w-4" />
+                          )}
+                        </button>
                       )}
-                    </button>
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault()
+                          deleteAssessment(assessment.id, assessment.targetName)
+                        }}
+                        disabled={deletingId === assessment.id}
+                        className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Delete assessment"
+                      >
+                        {deletingId === assessment.id ? (
+                          <div className="w-4 h-4 border-2 border-red-500 border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
 

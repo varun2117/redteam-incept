@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-import { getPrisma } from '@/lib/prisma'
+import { executePrismaOperation } from '@/lib/prisma'
 
 export async function GET(
   request: NextRequest,
@@ -21,25 +21,28 @@ export async function GET(
 
     console.log('Querying assessment:', params.id, 'for user:', session.user.id)
     
-    // First check if assessment exists at all
-    const prisma = getPrisma()
-    const assessmentExists = await prisma.assessment.findFirst({
-      where: { id: params.id },
-      select: { id: true, userId: true, targetName: true }
+    // First check if assessment exists at all and get user-specific assessment
+    const { assessmentExists, assessment } = await executePrismaOperation(async (prisma) => {
+      const assessmentExists = await prisma.assessment.findFirst({
+        where: { id: params.id },
+        select: { id: true, userId: true, targetName: true }
+      })
+      
+      const assessment = await prisma.assessment.findFirst({
+        where: {
+          id: params.id,
+          userId: session.user.id
+        },
+        include: {
+          findings: true,
+          exploitResults: true
+        }
+      })
+      
+      return { assessmentExists, assessment }
     })
-    console.log('Assessment exists (any user):', assessmentExists)
     
-    // Then check for user-specific assessment
-    const assessment = await prisma.assessment.findFirst({
-      where: {
-        id: params.id,
-        userId: session.user.id
-      },
-      include: {
-        findings: true,
-        exploitResults: true
-      }
-    })
+    console.log('Assessment exists (any user):', assessmentExists)
 
     console.log('Assessment found for current user:', assessment ? 'Yes' : 'No')
     if (!assessment && assessmentExists) {
@@ -74,6 +77,70 @@ export async function GET(
   }
 }
 
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions)
+    
+    if (!session || !session.user?.id) {
+      return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
+    }
+
+    const assessmentId = params.id
+    const body = await request.json()
+    const { action } = body
+
+    if (action === 'stop') {
+      // Stop a running assessment
+      const assessment = await executePrismaOperation(async (prisma) => {
+        const assessment = await prisma.assessment.findFirst({
+          where: {
+            id: assessmentId,
+            userId: session.user.id,
+            status: 'running'
+          }
+        })
+
+        if (!assessment) {
+          return null
+        }
+
+        return await prisma.assessment.update({
+          where: { id: assessmentId },
+          data: {
+            status: 'failed',
+            systemAnalysis: JSON.stringify({
+              error: 'Assessment stopped by user',
+              stoppedAt: new Date().toISOString(),
+              stoppedBy: session.user.id
+            })
+          }
+        })
+      })
+
+      if (!assessment) {
+        return NextResponse.json({ message: 'Assessment not found or not running' }, { status: 404 })
+      }
+
+      return NextResponse.json({ 
+        success: true,
+        message: 'Assessment stopped successfully' 
+      })
+    }
+
+    return NextResponse.json({ message: 'Invalid action' }, { status: 400 })
+
+  } catch (error) {
+    console.error('Patch assessment error:', error)
+    return NextResponse.json(
+      { message: 'Internal server error' },
+      { status: 500 }
+    )
+  }
+}
+
 export async function DELETE(
   request: NextRequest,
   { params }: { params: { id: string } }
@@ -87,23 +154,30 @@ export async function DELETE(
 
     const assessmentId = params.id
 
-    // First check if assessment exists and belongs to the user
-    const prismaForDelete = getPrisma()
-    const assessment = await prismaForDelete.assessment.findFirst({
-      where: {
-        id: assessmentId,
-        userId: session.user.id
+    // First check if assessment exists and belongs to the user, then delete
+    const result = await executePrismaOperation(async (prisma) => {
+      const assessment = await prisma.assessment.findFirst({
+        where: {
+          id: assessmentId,
+          userId: session.user.id
+        }
+      })
+
+      if (!assessment) {
+        return null
       }
+
+      // Delete the assessment (this will cascade delete findings and exploitResults)
+      await prisma.assessment.delete({
+        where: { id: assessmentId }
+      })
+
+      return true
     })
 
-    if (!assessment) {
+    if (!result) {
       return NextResponse.json({ message: 'Assessment not found' }, { status: 404 })
     }
-
-    // Delete the assessment (this will cascade delete findings and exploitResults)
-    await prismaForDelete.assessment.delete({
-      where: { id: assessmentId }
-    })
 
     return NextResponse.json({ 
       success: true,
