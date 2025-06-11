@@ -1,8 +1,5 @@
 import { PrismaClient } from '@prisma/client'
 
-// Track connection count for unique naming in serverless
-let connectionCount = 0
-
 // Global singleton for development only
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
@@ -10,19 +7,21 @@ const globalForPrisma = globalThis as unknown as {
 
 // Create a function to instantiate Prisma with proper configuration
 function createPrismaClient() {
-  const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === 'production'
-  
   let databaseUrl = process.env.DATABASE_URL || ''
   
-  // In serverless environments, modify connection string to disable prepared statements
-  if (isServerless) {
-    connectionCount++
-    const url = new URL(databaseUrl)
-    url.searchParams.set('prepared_statements', 'false')
-    url.searchParams.set('connection_limit', '1')
-    url.searchParams.set('pool_timeout', '20')
-    url.searchParams.set('connect_timeout', '60')
-    databaseUrl = url.toString()
+  // Only modify URL for PostgreSQL connections to avoid prepared statement conflicts
+  if (databaseUrl && (databaseUrl.startsWith('postgres://') || databaseUrl.startsWith('postgresql://'))) {
+    try {
+      const url = new URL(databaseUrl)
+      url.searchParams.set('prepared_statements', 'false')
+      url.searchParams.set('connection_limit', '1')
+      url.searchParams.set('pool_timeout', '20')
+      url.searchParams.set('connect_timeout', '60')
+      databaseUrl = url.toString()
+      console.log('PostgreSQL connection configured with prepared_statements=false')
+    } catch (error) {
+      console.warn('Failed to modify PostgreSQL URL:', error)
+    }
   }
   
   return new PrismaClient({
@@ -42,66 +41,64 @@ export function getFreshPrismaClient() {
 
 // Main function to get Prisma client
 export function getPrisma() {
-  const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === 'production'
-  
-  if (isServerless) {
-    // In serverless, always create fresh clients to avoid prepared statement conflicts
-    return createPrismaClient()
-  } else {
-    // In development, use singleton
-    if (!globalForPrisma.prisma) {
-      globalForPrisma.prisma = createPrismaClient()
-    }
-    return globalForPrisma.prisma
+  // Use singleton approach with prepared statements disabled
+  if (!globalForPrisma.prisma) {
+    globalForPrisma.prisma = createPrismaClient()
   }
+  return globalForPrisma.prisma
 }
 
-// Function to safely execute database operations with fresh connections
+// Function to safely execute database operations with error recovery
 export async function executePrismaOperation<T>(
   operation: (prisma: PrismaClient) => Promise<T>
 ): Promise<T> {
-  const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NODE_ENV === 'production'
+  let retryCount = 0
+  const maxRetries = 2
   
-  if (isServerless) {
-    // In serverless, use fresh client for each operation
-    const freshClient = getFreshPrismaClient()
-    try {
-      const result = await operation(freshClient)
-      await freshClient.$disconnect()
-      return result
-    } catch (error) {
-      await freshClient.$disconnect()
-      throw error
-    }
-  } else {
-    // In development, use singleton with error recovery
-    const prisma = getPrisma()
+  while (retryCount <= maxRetries) {
+    // For each retry, use a completely fresh client to avoid any prepared statement issues
+    const client = retryCount > 0 ? getFreshPrismaClient() : getPrisma()
     
     try {
-      return await operation(prisma)
-    } catch (error) {
-      console.error('Prisma operation error:', error)
+      const result = await operation(client)
       
-      // If we get a prepared statement error, try to reset the connection
+      // If we used a fresh client, disconnect it
+      if (retryCount > 0) {
+        await client.$disconnect()
+      }
+      
+      return result
+    } catch (error) {
+      console.error(`Prisma operation error (attempt ${retryCount + 1}):`, error)
+      
+      // If we used a fresh client, disconnect it
+      if (retryCount > 0) {
+        await client.$disconnect()
+      }
+      
+      // If we get a prepared statement error, reset the global connection and retry
       if (error instanceof Error && error.message.includes('prepared statement')) {
-        console.log('Resetting Prisma connection due to prepared statement error')
+        console.log('Prepared statement error detected, resetting connection')
         
         try {
           await globalForPrisma.prisma?.$disconnect()
           globalForPrisma.prisma = undefined
-          
-          // Retry with new connection
-          const newPrisma = getPrisma()
-          return await operation(newPrisma)
-        } catch (retryError) {
-          console.error('Retry failed:', retryError)
-          throw retryError
+        } catch (disconnectError) {
+          console.warn('Error disconnecting:', disconnectError)
+        }
+        
+        retryCount++
+        if (retryCount <= maxRetries) {
+          console.log(`Retrying operation (attempt ${retryCount + 1})`)
+          continue
         }
       }
       
       throw error
     }
   }
+  
+  throw new Error('Max retries exceeded')
 }
 
 // Export default instance for backwards compatibility
