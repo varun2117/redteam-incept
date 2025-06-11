@@ -58,6 +58,22 @@ export default function Assessments() {
       }, 5000)
     } else {
       console.log('No running assessments, auto-refresh disabled')
+      // Show completion notification when assessments finish
+      if (session && assessments.length > 0 && runningCount === 0) {
+        const completedCount = assessments.filter(a => a.status === 'completed').length
+        const failedCount = assessments.filter(a => a.status === 'failed').length
+        
+        if (completedCount > 0) {
+          toast.success(`${completedCount} assessment${completedCount > 1 ? 's' : ''} completed successfully!`, {
+            duration: 4000
+          })
+        }
+        if (failedCount > 0) {
+          toast.error(`${failedCount} assessment${failedCount > 1 ? 's' : ''} failed`, {
+            duration: 4000
+          })
+        }
+      }
     }
     
     return () => {
@@ -66,7 +82,7 @@ export default function Assessments() {
         clearInterval(interval)
       }
     }
-  }, [session, runningCount])
+  }, [session, runningCount, assessments.length])
 
   // Show info about running assessments when page loads
   useEffect(() => {

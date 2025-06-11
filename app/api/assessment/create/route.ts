@@ -86,8 +86,32 @@ async function startLocalAssessment(
   openrouterApiKey: string,
   selectedModel: string
 ) {
+  const MAX_ASSESSMENT_TIME = 45 * 60 * 1000 // 45 minutes timeout
+  const assessmentStartTime = Date.now()
+  
+  // Set up timeout to prevent stuck assessments
+  const assessmentTimeout = setTimeout(async () => {
+    console.error(`⏰ Assessment ${assessmentId} timed out after 45 minutes`)
+    try {
+      await executePrismaOperation(async (prisma) => {
+        return await prisma.assessment.update({
+          where: { id: assessmentId },
+          data: { 
+            status: 'failed',
+            systemAnalysis: JSON.stringify({ error: 'Assessment timed out after 45 minutes' })
+          }
+        })
+      })
+    } catch (error) {
+      console.error(`Failed to mark timed out assessment as failed:`, error)
+    }
+  }, MAX_ASSESSMENT_TIME)
+
+  // Declare interval variable outside try block for proper cleanup
+  let heartbeatInterval: NodeJS.Timeout | null = null
+
   try {
-    console.log(`Starting assessment for ${assessmentId}`)
+    console.log(`Starting assessment for ${assessmentId} with ${MAX_ASSESSMENT_TIME/60000}min timeout`)
     
     // Import the required modules
     const { RedTeamAgent } = await import('@/lib/RedTeamAgent')
@@ -134,6 +158,28 @@ async function startLocalAssessment(
       })
     })
     
+    // Set up heartbeat updates during assessment
+    heartbeatInterval = setInterval(async () => {
+      try {
+        await executePrismaOperation(async (prisma) => {
+          return await prisma.assessment.update({
+            where: { id: assessmentId },
+            data: { 
+              updatedAt: new Date(),
+              systemAnalysis: JSON.stringify({ 
+                status: 'in_progress', 
+                lastHeartbeat: new Date().toISOString(),
+                elapsedTime: Date.now() - assessmentStartTime
+              })
+            }
+          })
+        })
+        console.log(`💓 Heartbeat sent for assessment ${assessmentId}`)
+      } catch (error) {
+        console.error(`Heartbeat failed for assessment ${assessmentId}:`, error)
+      }
+    }, 30000) // Every 30 seconds
+    
     // Set up progress callback
     redTeamAgent.setProgressCallback((progress: any) => {
       console.log(`Assessment ${assessmentId} progress:`, progress)
@@ -146,11 +192,26 @@ async function startLocalAssessment(
       assessmentId
     )
     
+    // Clear timeout and heartbeat on successful completion
+    clearTimeout(assessmentTimeout)
+    if (heartbeatInterval) clearInterval(heartbeatInterval)
+    
     console.log(`✅ Assessment ${assessmentId} completed successfully`)
     console.log(`📊 Results: ${results.summary.vulnerabilities}/${results.summary.totalTests} vulnerabilities found`)
     
-    // Save results to database
+    // Save results to database with transaction safety
     await executePrismaOperation(async (prisma) => {
+      // First check if assessment is still in running state
+      const currentAssessment = await prisma.assessment.findUnique({
+        where: { id: assessmentId },
+        select: { status: true }
+      })
+      
+      if (currentAssessment?.status !== 'running') {
+        console.warn(`Assessment ${assessmentId} status changed to ${currentAssessment?.status}, skipping completion update`)
+        return false
+      }
+      
       await prisma.assessment.update({
         where: { id: assessmentId },
         data: {
@@ -191,12 +252,21 @@ async function startLocalAssessment(
   } catch (error) {
     console.error(`Error starting assessment for ${assessmentId}:`, error)
     
+    // Clear timeout and heartbeat on error
+    clearTimeout(assessmentTimeout)
+    if (heartbeatInterval) clearInterval(heartbeatInterval)
+    
     // Mark assessment as failed using safe operation
     await executePrismaOperation(async (prisma) => {
       return await prisma.assessment.update({
         where: { id: assessmentId },
         data: {
-          status: 'failed'
+          status: 'failed',
+          systemAnalysis: JSON.stringify({ 
+            error: error instanceof Error ? error.message : 'Unknown error',
+            failedAt: new Date().toISOString(),
+            elapsedTime: Date.now() - assessmentStartTime
+          })
         }
       })
     }).catch(console.error)
