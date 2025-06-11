@@ -42,8 +42,8 @@ export async function POST(request: NextRequest) {
     })
     console.log('Assessment created with ID:', assessment.id)
 
-    // Start assessment via local API
-    console.log('Starting assessment via local API...')
+    // Start assessment directly (no separate API call needed)
+    console.log('Starting assessment directly...')
     startLocalAssessment(
       assessment.id,
       targetName, 
@@ -85,50 +85,98 @@ async function startLocalAssessment(
   try {
     console.log(`Starting assessment for ${assessmentId}`)
     
-    // Make request to local assessment API
-    const assessmentRequest = {
-      targetName,
-      targetDescription,
-      chatAgentUrl: targetUrl,
-      openrouterApiKey,
-      selectedModel
+    // Import the required modules
+    const { RedTeamAgent } = await import('@/lib/RedTeamAgent')
+    const { ChatAgentConnector } = await import('@/lib/ChatAgentConnector')
+    
+    // Validate chat agent URL
+    if (!ChatAgentConnector.validateUrl(targetUrl)) {
+      throw new Error('Invalid chat agent URL format')
     }
     
-    console.log(`Making request to local assessment API`)
+    // Create chat agent connector
+    const defaultConfig = {
+      url: targetUrl,
+      method: 'POST' as const,
+      timeout: 30000,
+      retries: 3,
+      requestFormat: 'json' as const,
+      responseFormat: 'json' as const,
+      messageField: 'message',
+      responseField: 'message'
+    }
     
-    const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/assessment/start`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(assessmentRequest)
+    const chatConnector = new ChatAgentConnector(defaultConfig)
+    
+    // Test connection to chat agent
+    console.log(`Testing connection to chat agent: ${targetUrl}`)
+    const connectionTest = await chatConnector.testConnection()
+    
+    if (!connectionTest.success) {
+      throw new Error(`Failed to connect to chat agent: ${connectionTest.error}`)
+    }
+    
+    console.log(`✅ Chat agent connection successful (${connectionTest.responseTime}ms)`)
+    
+    // Initialize red team agent
+    const redTeamAgent = new RedTeamAgent(openrouterApiKey, selectedModel)
+    redTeamAgent.setTargetInfo(targetName, targetDescription)
+    
+    // Update assessment status to running
+    await prisma.assessment.update({
+      where: { id: assessmentId },
+      data: { status: 'running' }
     })
     
-    if (!response.ok) {
-      throw new Error(`Assessment request failed: ${response.status} ${response.statusText}`)
-    }
+    // Set up progress callback
+    redTeamAgent.setProgressCallback((progress: any) => {
+      console.log(`Assessment ${assessmentId} progress:`, progress)
+    })
     
-    const result = await response.json()
-    console.log('Assessment response:', result)
+    // Run the assessment
+    const results = await redTeamAgent.runSecurityAssessment(
+      chatConnector,
+      targetName,
+      assessmentId
+    )
     
-    if (!result.success) {
-      throw new Error(`Assessment failed: ${result.message}`)
-    }
+    console.log(`✅ Assessment ${assessmentId} completed successfully`)
+    console.log(`📊 Results: ${results.summary.vulnerabilities}/${results.summary.totalTests} vulnerabilities found`)
     
-    const localAssessmentId = result.assessmentId
-    console.log(`Assessment started with ID: ${localAssessmentId}`)
-    
-    // Update our assessment with the correct ID
+    // Save results to database
     await prisma.assessment.update({
       where: { id: assessmentId },
       data: {
-        id: localAssessmentId,
-        status: 'running'
+        status: 'completed',
+        totalTests: results.summary.totalTests,
+        vulnerabilities: results.summary.vulnerabilities,
+        securityScore: results.summary.securityScore,
+        systemAnalysis: JSON.stringify(results.systemAnalysis),
+        vulnerabilityReport: JSON.stringify(results.vulnerabilityReport),
+        riskLevel: results.vulnerabilityReport?.executiveSummary?.riskLevel,
+        executionTime: results.vulnerabilityReport?.executionTime
       }
     })
     
-    // Poll for completion
-    pollLocalAssessment(localAssessmentId)
+    // Save findings
+    if (results.findings && results.findings.length > 0) {
+      const findingData = results.findings.map((finding: any) => ({
+        assessmentId,
+        vector: finding.vector,
+        prompt: finding.test_case.prompt,
+        response: finding.response,
+        technique: finding.test_case.technique,
+        vulnerable: finding.analysis.vulnerable,
+        vulnerabilityType: finding.analysis.vulnerability_type,
+        severity: finding.analysis.severity,
+        explanation: finding.analysis.explanation,
+        recommendations: finding.analysis.recommendations
+      }))
+      
+      await prisma.finding.createMany({ data: findingData })
+    }
+    
+    console.log(`💾 Saved assessment results to database`)
     
   } catch (error) {
     console.error(`Error starting assessment for ${assessmentId}:`, error)
@@ -143,64 +191,4 @@ async function startLocalAssessment(
   }
 }
 
-async function pollLocalAssessment(assessmentId: string) {
-  const maxPolls = 120 // 10 minutes max (5-second intervals)
-  let pollCount = 0
-  
-  const poll = async () => {
-    try {
-      pollCount++
-      console.log(`Polling assessment ${assessmentId} (attempt ${pollCount}/${maxPolls})`)
-      
-      const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/assessment/start?id=${assessmentId}`)
-      
-      if (!response.ok) {
-        throw new Error(`Assessment poll failed: ${response.status}`)
-      }
-      
-      const result = await response.json()
-      
-      if (result.success && result.assessment) {
-        const assessment = result.assessment
-        
-        if (assessment.status === 'completed') {
-          console.log(`Assessment ${assessmentId} completed!`)
-          return
-          
-        } else if (assessment.status === 'failed') {
-          console.log(`Assessment ${assessmentId} failed`)
-          return
-        }
-        
-        // Still running, continue polling
-        if (pollCount < maxPolls) {
-          setTimeout(poll, 5000) // Poll every 5 seconds
-        } else {
-          console.log(`Assessment ${assessmentId} timed out`)
-          await prisma.assessment.update({
-            where: { id: assessmentId },
-            data: { status: 'failed' }
-          }).catch(console.error)
-        }
-        
-      } else {
-        throw new Error('Invalid response from assessment API')
-      }
-      
-    } catch (error) {
-      console.error(`Error polling assessment ${assessmentId}:`, error)
-      
-      if (pollCount < maxPolls) {
-        setTimeout(poll, 5000) // Retry
-      } else {
-        await prisma.assessment.update({
-          where: { id: assessmentId },
-          data: { status: 'failed' }
-        }).catch(console.error)
-      }
-    }
-  }
-  
-  // Start polling
-  setTimeout(poll, 2000) // Wait 2 seconds before first poll
-}
+// Remove polling function since we now run assessment directly
