@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { getPrisma } from '@/lib/prisma'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,6 +18,7 @@ export async function GET(request: NextRequest) {
     }
 
     console.log('Querying assessments for user:', session.user.id)
+    const prisma = getPrisma()
     const assessments = await prisma.assessment.findMany({
       where: {
         userId: session.user.id

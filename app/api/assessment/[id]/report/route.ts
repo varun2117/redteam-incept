@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { getPrisma } from '@/lib/prisma'
 
 export async function GET(
   request: NextRequest,
@@ -19,6 +19,7 @@ export async function GET(
     const assessmentId = params.id
 
     // Get report from database
+    const prisma = getPrisma()
     const assessment = await prisma.assessment.findUnique({
       where: { id: assessmentId },
       include: {

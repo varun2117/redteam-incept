@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { getPrisma } from '@/lib/prisma'
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
 
     // Create assessment record
     console.log('Creating assessment record...')
+    const prisma = getPrisma()
     const assessment = await prisma.assessment.create({
       data: {
         userId: session.user.id,
@@ -123,6 +124,7 @@ async function startLocalAssessment(
     redTeamAgent.setTargetInfo(targetName, targetDescription)
     
     // Update assessment status to running
+    const prisma = getPrisma()
     await prisma.assessment.update({
       where: { id: assessmentId },
       data: { status: 'running' }
@@ -182,7 +184,8 @@ async function startLocalAssessment(
     console.error(`Error starting assessment for ${assessmentId}:`, error)
     
     // Mark assessment as failed
-    await prisma.assessment.update({
+    const prismaForError = getPrisma()
+    await prismaForError.assessment.update({
       where: { id: assessmentId },
       data: {
         status: 'failed'

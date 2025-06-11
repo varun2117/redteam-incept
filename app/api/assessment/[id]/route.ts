@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { getPrisma } from '@/lib/prisma'
 
 export async function GET(
   request: NextRequest,
@@ -22,6 +22,7 @@ export async function GET(
     console.log('Querying assessment:', params.id, 'for user:', session.user.id)
     
     // First check if assessment exists at all
+    const prisma = getPrisma()
     const assessmentExists = await prisma.assessment.findFirst({
       where: { id: params.id },
       select: { id: true, userId: true, targetName: true }
