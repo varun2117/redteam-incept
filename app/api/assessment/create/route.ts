@@ -4,6 +4,8 @@ import { authOptions } from '@/lib/auth'
 import { getPrisma } from '@/lib/prisma'
 
 export async function POST(request: NextRequest) {
+  let prisma: any = null
+  
   try {
     console.log('Starting assessment creation...')
     
@@ -30,9 +32,9 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // Create assessment record
+    // Create assessment record with proper client management
     console.log('Creating assessment record...')
-    const prisma = getPrisma()
+    prisma = getPrisma()
     const assessment = await prisma.assessment.create({
       data: {
         userId: session.user.id,
@@ -42,6 +44,9 @@ export async function POST(request: NextRequest) {
       }
     })
     console.log('Assessment created with ID:', assessment.id)
+
+    // Disconnect Prisma client after creation
+    await prisma.$disconnect()
 
     // Start assessment directly (no separate API call needed)
     console.log('Starting assessment directly...')
@@ -54,11 +59,12 @@ export async function POST(request: NextRequest) {
       selectedModel
     ).catch(error => {
       console.error('Assessment error:', error)
-      // Update assessment to failed status
-      prisma.assessment.update({
+      // Update assessment to failed status with new client
+      const errorPrisma = getPrisma()
+      errorPrisma.assessment.update({
         where: { id: assessment.id },
         data: { status: 'failed' }
-      }).catch(console.error)
+      }).then(() => errorPrisma.$disconnect()).catch(console.error)
     })
 
     return NextResponse.json({ 
@@ -68,6 +74,16 @@ export async function POST(request: NextRequest) {
     
   } catch (error) {
     console.error('Create assessment error:', error)
+    
+    // Ensure client is disconnected on error
+    if (prisma) {
+      try {
+        await prisma.$disconnect()
+      } catch (disconnectError) {
+        console.warn('Error disconnecting Prisma client:', disconnectError)
+      }
+    }
+    
     return NextResponse.json(
       { message: `Internal server error: ${error instanceof Error ? error.message : 'Unknown error'}` },
       { status: 500 }
@@ -129,6 +145,7 @@ async function startLocalAssessment(
       where: { id: assessmentId },
       data: { status: 'running' }
     })
+    await prisma.$disconnect()
     
     // Set up progress callback
     redTeamAgent.setProgressCallback((progress: any) => {
@@ -146,7 +163,8 @@ async function startLocalAssessment(
     console.log(`📊 Results: ${results.summary.vulnerabilities}/${results.summary.totalTests} vulnerabilities found`)
     
     // Save results to database
-    await prisma.assessment.update({
+    const resultsPrisma = getPrisma()
+    await resultsPrisma.assessment.update({
       where: { id: assessmentId },
       data: {
         status: 'completed',
@@ -175,8 +193,10 @@ async function startLocalAssessment(
         recommendations: finding.analysis.recommendations
       }))
       
-      await prisma.finding.createMany({ data: findingData })
+      await resultsPrisma.finding.createMany({ data: findingData })
     }
+    
+    await resultsPrisma.$disconnect()
     
     console.log(`💾 Saved assessment results to database`)
     
@@ -191,6 +211,7 @@ async function startLocalAssessment(
         status: 'failed'
       }
     })
+    await prismaForError.$disconnect()
   }
 }
 
