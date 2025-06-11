@@ -42,17 +42,22 @@ export async function POST(request: NextRequest) {
     })
     console.log('Assessment created with ID:', assessment.id)
 
-    // TODO: Implement assessment logic in Next.js API
-    // For now, mark assessment as completed with placeholder data
-    console.log('Creating placeholder assessment (Express.js backend not available)...')
-    await prisma.assessment.update({
-      where: { id: assessment.id },
-      data: { 
-        status: 'completed',
-        totalTests: 0,
-        vulnerabilities: 0,
-        securityScore: 0.0
-      }
+    // Start assessment via backend
+    console.log('Starting backend assessment...')
+    startBackendAssessment(
+      assessment.id,
+      targetName, 
+      targetDescription || '', 
+      targetUrl, 
+      openrouterApiKey, 
+      selectedModel
+    ).catch(error => {
+      console.error('Backend assessment error:', error)
+      // Update assessment to failed status
+      prisma.assessment.update({
+        where: { id: assessment.id },
+        data: { status: 'failed' }
+      }).catch(console.error)
     })
 
     return NextResponse.json({ 
@@ -81,8 +86,8 @@ async function startBackendAssessment(
     console.log(`Starting real assessment for ${assessmentId}`)
     
     // Make request to backend assessment API
-    const backendPort = process.env.BACKEND_PORT || '3001'
-    const backendUrl = `http://localhost:${backendPort}/api/assessment/start`
+    const backendUrl = process.env.BACKEND_URL || 'http://localhost:3001'
+    const assessmentUrl = `${backendUrl}/api/assessment/start`
     
     const assessmentRequest = {
       targetName,
@@ -92,9 +97,9 @@ async function startBackendAssessment(
       selectedModel
     }
     
-    console.log(`Making request to backend: ${backendUrl}`)
+    console.log(`Making request to backend: ${assessmentUrl}`)
     
-    const response = await fetch(backendUrl, {
+    const response = await fetch(assessmentUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -125,7 +130,7 @@ async function startBackendAssessment(
     })
     
     // Poll backend for completion
-    pollBackendAssessment(assessmentId, backendAssessmentId, backendPort)
+    pollBackendAssessment(assessmentId, backendAssessmentId, backendUrl)
     
   } catch (error) {
     console.error(`Error starting backend assessment for ${assessmentId}:`, error)
@@ -143,7 +148,7 @@ async function startBackendAssessment(
 async function pollBackendAssessment(
   assessmentId: string, 
   backendAssessmentId: string, 
-  backendPort: string
+  backendUrl: string
 ) {
   const maxPolls = 60 // 5 minutes max (5-second intervals)
   let pollCount = 0
@@ -153,7 +158,7 @@ async function pollBackendAssessment(
       pollCount++
       console.log(`Polling backend assessment ${backendAssessmentId} (attempt ${pollCount}/${maxPolls})`)
       
-      const response = await fetch(`http://localhost:${backendPort}/api/assessment/${backendAssessmentId}/status`)
+      const response = await fetch(`${backendUrl}/api/assessment/${backendAssessmentId}/status`)
       
       if (!response.ok) {
         throw new Error(`Backend poll failed: ${response.status}`)
