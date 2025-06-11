@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-import { getPrisma } from '@/lib/prisma'
+import { getPrisma, executePrismaOperation } from '@/lib/prisma'
 
 export async function POST(request: NextRequest) {
-  let prisma: any = null
-  
   try {
     console.log('Starting assessment creation...')
     
@@ -32,21 +30,19 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // Create assessment record with proper client management
+    // Create assessment record using safe operation wrapper
     console.log('Creating assessment record...')
-    prisma = getPrisma()
-    const assessment = await prisma.assessment.create({
-      data: {
-        userId: session.user.id,
-        targetName,
-        targetDescription: targetDescription || '',
-        status: 'running'
-      }
+    const assessment = await executePrismaOperation(async (prisma) => {
+      return await prisma.assessment.create({
+        data: {
+          userId: session.user.id,
+          targetName,
+          targetDescription: targetDescription || '',
+          status: 'running'
+        }
+      })
     })
     console.log('Assessment created with ID:', assessment.id)
-
-    // Disconnect Prisma client after creation
-    await prisma.$disconnect()
 
     // Start assessment directly (no separate API call needed)
     console.log('Starting assessment directly...')
@@ -59,12 +55,13 @@ export async function POST(request: NextRequest) {
       selectedModel
     ).catch(error => {
       console.error('Assessment error:', error)
-      // Update assessment to failed status with new client
-      const errorPrisma = getPrisma()
-      errorPrisma.assessment.update({
-        where: { id: assessment.id },
-        data: { status: 'failed' }
-      }).then(() => errorPrisma.$disconnect()).catch(console.error)
+      // Update assessment to failed status using safe operation
+      executePrismaOperation(async (prisma) => {
+        return await prisma.assessment.update({
+          where: { id: assessment.id },
+          data: { status: 'failed' }
+        })
+      }).catch(console.error)
     })
 
     return NextResponse.json({ 
@@ -74,16 +71,6 @@ export async function POST(request: NextRequest) {
     
   } catch (error) {
     console.error('Create assessment error:', error)
-    
-    // Ensure client is disconnected on error
-    if (prisma) {
-      try {
-        await prisma.$disconnect()
-      } catch (disconnectError) {
-        console.warn('Error disconnecting Prisma client:', disconnectError)
-      }
-    }
-    
     return NextResponse.json(
       { message: `Internal server error: ${error instanceof Error ? error.message : 'Unknown error'}` },
       { status: 500 }
@@ -140,12 +127,12 @@ async function startLocalAssessment(
     redTeamAgent.setTargetInfo(targetName, targetDescription)
     
     // Update assessment status to running
-    const prisma = getPrisma()
-    await prisma.assessment.update({
-      where: { id: assessmentId },
-      data: { status: 'running' }
+    await executePrismaOperation(async (prisma) => {
+      return await prisma.assessment.update({
+        where: { id: assessmentId },
+        data: { status: 'running' }
+      })
     })
-    await prisma.$disconnect()
     
     // Set up progress callback
     redTeamAgent.setProgressCallback((progress: any) => {
@@ -163,55 +150,56 @@ async function startLocalAssessment(
     console.log(`📊 Results: ${results.summary.vulnerabilities}/${results.summary.totalTests} vulnerabilities found`)
     
     // Save results to database
-    const resultsPrisma = getPrisma()
-    await resultsPrisma.assessment.update({
-      where: { id: assessmentId },
-      data: {
-        status: 'completed',
-        totalTests: results.summary.totalTests,
-        vulnerabilities: results.summary.vulnerabilities,
-        securityScore: results.summary.securityScore,
-        systemAnalysis: JSON.stringify(results.systemAnalysis),
-        vulnerabilityReport: JSON.stringify(results.vulnerabilityReport),
-        riskLevel: results.vulnerabilityReport?.executiveSummary?.riskLevel,
-        executionTime: results.vulnerabilityReport?.executionTime
-      }
-    })
-    
-    // Save findings
-    if (results.findings && results.findings.length > 0) {
-      const findingData = results.findings.map((finding: any) => ({
-        assessmentId,
-        vector: finding.vector,
-        prompt: finding.test_case.prompt,
-        response: finding.response,
-        technique: finding.test_case.technique,
-        vulnerable: finding.analysis.vulnerable,
-        vulnerabilityType: finding.analysis.vulnerability_type,
-        severity: finding.analysis.severity,
-        explanation: finding.analysis.explanation,
-        recommendations: finding.analysis.recommendations
-      }))
+    await executePrismaOperation(async (prisma) => {
+      await prisma.assessment.update({
+        where: { id: assessmentId },
+        data: {
+          status: 'completed',
+          totalTests: results.summary.totalTests,
+          vulnerabilities: results.summary.vulnerabilities,
+          securityScore: results.summary.securityScore,
+          systemAnalysis: JSON.stringify(results.systemAnalysis),
+          vulnerabilityReport: JSON.stringify(results.vulnerabilityReport),
+          riskLevel: results.vulnerabilityReport?.executiveSummary?.riskLevel,
+          executionTime: results.vulnerabilityReport?.executionTime
+        }
+      })
       
-      await resultsPrisma.finding.createMany({ data: findingData })
-    }
-    
-    await resultsPrisma.$disconnect()
+      // Save findings
+      if (results.findings && results.findings.length > 0) {
+        const findingData = results.findings.map((finding: any) => ({
+          assessmentId,
+          vector: finding.vector,
+          prompt: finding.test_case.prompt,
+          response: finding.response,
+          technique: finding.test_case.technique,
+          vulnerable: finding.analysis.vulnerable,
+          vulnerabilityType: finding.analysis.vulnerability_type,
+          severity: finding.analysis.severity,
+          explanation: finding.analysis.explanation,
+          recommendations: finding.analysis.recommendations
+        }))
+        
+        await prisma.finding.createMany({ data: findingData })
+      }
+      
+      return true
+    })
     
     console.log(`💾 Saved assessment results to database`)
     
   } catch (error) {
     console.error(`Error starting assessment for ${assessmentId}:`, error)
     
-    // Mark assessment as failed
-    const prismaForError = getPrisma()
-    await prismaForError.assessment.update({
-      where: { id: assessmentId },
-      data: {
-        status: 'failed'
-      }
-    })
-    await prismaForError.$disconnect()
+    // Mark assessment as failed using safe operation
+    await executePrismaOperation(async (prisma) => {
+      return await prisma.assessment.update({
+        where: { id: assessmentId },
+        data: {
+          status: 'failed'
+        }
+      })
+    }).catch(console.error)
   }
 }
 
