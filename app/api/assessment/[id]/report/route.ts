@@ -17,35 +17,14 @@ export async function GET(
     const format = searchParams.get('format') || 'json'
     const assessmentId = params.id
 
-    // Forward the request to the backend
-    const backendUrl = process.env.BACKEND_URL || 'http://localhost:3001'
-    const backendResponse = await fetch(`${backendUrl}/api/assessment/${assessmentId}/report?format=${format}`)
-
-    if (!backendResponse.ok) {
-      const errorText = await backendResponse.text()
-      return NextResponse.json(
-        { success: false, message: errorText || 'Failed to get report from backend' },
-        { status: backendResponse.status }
-      )
-    }
-
-    // For JSON format, return as JSON
-    if (format === 'json') {
-      const reportData = await backendResponse.json()
-      return NextResponse.json(reportData)
-    }
-
-    // For HTML and text formats, return the content directly with appropriate headers
-    const content = await backendResponse.text()
-    const contentType = format === 'html' ? 'text/html' : 'text/plain'
-    const filename = `vulnerability-report-${assessmentId}.${format === 'html' ? 'html' : 'txt'}`
-
-    return new NextResponse(content, {
-      headers: {
-        'Content-Type': contentType,
-        'Content-Disposition': `attachment; filename="${filename}"`
-      }
-    })
+    // TODO: Implement report generation in Next.js API
+    // For now, return a placeholder response
+    return NextResponse.json({
+      success: false,
+      message: 'Report generation not yet implemented in Next.js API. Please use the Express.js backend.',
+      note: 'This feature requires migrating the assessment logic from Express.js to Next.js API routes.',
+      assessmentId
+    }, { status: 501 })
 
   } catch (error) {
     console.error('Report API error:', error)
