@@ -52,7 +52,8 @@ export async function POST(request: NextRequest) {
       targetDescription || '', 
       targetUrl, 
       openrouterApiKey, 
-      selectedModel
+      selectedModel,
+      session.user.id
     ).catch(error => {
       console.error('Assessment error:', error)
       // Update assessment to failed status using safe operation
@@ -84,7 +85,8 @@ async function startLocalAssessment(
   targetDescription: string,
   targetUrl: string,
   openrouterApiKey: string,
-  selectedModel: string
+  selectedModel: string,
+  userId: string
 ) {
   const MAX_ASSESSMENT_TIME = 45 * 60 * 1000 // 45 minutes timeout
   const assessmentStartTime = Date.now()
@@ -189,7 +191,8 @@ async function startLocalAssessment(
     const results = await redTeamAgent.runSecurityAssessment(
       chatConnector,
       targetName,
-      assessmentId
+      assessmentId,
+      userId
     )
     
     // Clear timeout and heartbeat on successful completion

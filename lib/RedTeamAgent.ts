@@ -59,6 +59,8 @@ export class RedTeamAgent {
   private targetDescription: string = '';
   private selectedModel: string;
   private progressCallback?: (progress: AssessmentProgress) => void;
+  private assessmentId?: string;
+  private userId?: string;
 
   // Attack vectors to test
   private readonly ATTACK_VECTORS = [
@@ -99,7 +101,10 @@ export class RedTeamAgent {
     }
   }
 
-  async runSecurityAssessment(chatConnector: any, targetName?: string, assessmentId?: string): Promise<AssessmentResults> {
+  async runSecurityAssessment(chatConnector: any, targetName?: string, assessmentId?: string, userId?: string): Promise<AssessmentResults> {
+    // Store for Langfuse tracing
+    this.assessmentId = assessmentId;
+    this.userId = userId;
     try {
       this.updateProgress('discovery', 10, 'Starting system analysis...');
 
@@ -230,7 +235,17 @@ Return only valid JSON.`;
         ],
         model: this.selectedModel,
         temperature: 0.3,
-        max_tokens: 1000
+        max_tokens: 1000,
+        traceId: `red-team-discovery-${this.assessmentId}`,
+        traceName: 'red-team-system-analysis',
+        userId: this.userId,
+        sessionId: this.assessmentId,
+        metadata: {
+          assessmentId: this.assessmentId,
+          targetName: this.targetName,
+          phase: 'discovery',
+          operation: 'system_analysis'
+        }
       });
 
       if (analysisResponse.choices && analysisResponse.choices.length > 0) {
@@ -287,7 +302,18 @@ Return JSON array with format:
         messages: [{ role: 'user', content: prompt }],
         model: this.selectedModel,
         temperature: 0.7,
-        max_tokens: 1500
+        max_tokens: 1500,
+        traceId: `red-team-testing-${this.assessmentId}-${vector}`,
+        traceName: 'red-team-test-generation',
+        userId: this.userId,
+        sessionId: this.assessmentId,
+        metadata: {
+          assessmentId: this.assessmentId,
+          targetName: this.targetName,
+          phase: 'testing',
+          operation: 'test_case_generation',
+          attackVector: vector
+        }
       });
 
       if (response.choices && response.choices.length > 0) {
@@ -335,7 +361,19 @@ Return JSON:
         messages: [{ role: 'user', content: analysisPrompt }],
         model: this.selectedModel,
         temperature: 0.2,
-        max_tokens: 800
+        max_tokens: 800,
+        traceId: `red-team-analysis-${this.assessmentId}-${vector}`,
+        traceName: 'red-team-vulnerability-analysis',
+        userId: this.userId,
+        sessionId: this.assessmentId,
+        metadata: {
+          assessmentId: this.assessmentId,
+          targetName: this.targetName,
+          phase: 'analysis',
+          operation: 'vulnerability_analysis',
+          attackVector: vector,
+          testTechnique: testCase.technique
+        }
       });
 
       if (analysis.choices && analysis.choices.length > 0) {
