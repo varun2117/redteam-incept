@@ -230,11 +230,11 @@ Return only valid JSON.`;
         ],
         model: this.selectedModel,
         temperature: 0.3,
-        maxTokens: 1000
+        max_tokens: 1000
       });
 
-      if (analysisResponse.success) {
-        return JSON.parse(analysisResponse.message);
+      if (analysisResponse.choices && analysisResponse.choices.length > 0) {
+        return JSON.parse(analysisResponse.choices[0].message.content);
       }
     } catch (error) {
       console.error('System analysis failed:', error);
@@ -287,11 +287,11 @@ Return JSON array with format:
         messages: [{ role: 'user', content: prompt }],
         model: this.selectedModel,
         temperature: 0.7,
-        maxTokens: 1500
+        max_tokens: 1500
       });
 
-      if (response.success) {
-        return JSON.parse(response.message);
+      if (response.choices && response.choices.length > 0) {
+        return JSON.parse(response.choices[0].message.content);
       }
     } catch (error) {
       console.error(`Test case generation failed for ${vector}:`, error);
@@ -335,11 +335,11 @@ Return JSON:
         messages: [{ role: 'user', content: analysisPrompt }],
         model: this.selectedModel,
         temperature: 0.2,
-        maxTokens: 800
+        max_tokens: 800
       });
 
-      if (analysis.success) {
-        return JSON.parse(analysis.message);
+      if (analysis.choices && analysis.choices.length > 0) {
+        return JSON.parse(analysis.choices[0].message.content);
       }
     } catch (error) {
       console.error('Vulnerability analysis failed:', error);
