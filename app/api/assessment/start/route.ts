@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-import { prisma } from '@/lib/prisma'
+import { getPrisma } from '@/lib/prisma'
 import { RedTeamAgent } from '@/lib/RedTeamAgent'
 import { ChatAgentConnector } from '@/lib/ChatAgentConnector'
 import { v4 as uuidv4 } from 'uuid'
@@ -79,6 +79,7 @@ export async function POST(request: NextRequest) {
     redTeamAgent.setTargetInfo(targetName, targetDescription)
 
     // Create assessment record in database
+    const prisma = getPrisma()
     const assessment = await prisma.assessment.create({
       data: {
         id: assessmentId,
@@ -165,7 +166,8 @@ async function runAssessmentBackground(assessmentId: string) {
     console.log(`📊 Results: ${results.summary.vulnerabilities}/${results.summary.totalTests} vulnerabilities found`)
 
     // Save results to database
-    await prisma.assessment.update({
+    const prismaForBackground = getPrisma()
+    await prismaForBackground.assessment.update({
       where: { id: assessmentId },
       data: {
         status: 'completed',
@@ -194,7 +196,7 @@ async function runAssessmentBackground(assessmentId: string) {
         recommendations: finding.analysis.recommendations
       }))
 
-      await prisma.finding.createMany({ data: findingData })
+      await prismaForBackground.finding.createMany({ data: findingData })
     }
 
     console.log(`💾 Saved assessment results to database`)
@@ -205,7 +207,8 @@ async function runAssessmentBackground(assessmentId: string) {
     assessmentData.progress.message = `Assessment failed: ${error instanceof Error ? error.message : 'Unknown error'}`
 
     // Update database
-    await prisma.assessment.update({
+    const prismaForError = getPrisma()
+    await prismaForError.assessment.update({
       where: { id: assessmentId },
       data: { status: 'failed' }
     }).catch(console.error)
@@ -228,7 +231,8 @@ export async function GET(request: NextRequest) {
     const assessment = activeAssessments.get(id)
     if (!assessment) {
       // Try to get from database
-      const dbAssessment = await prisma.assessment.findUnique({
+      const prismaForGet = getPrisma()
+      const dbAssessment = await prismaForGet.assessment.findUnique({
         where: { id },
         include: {
           findings: true

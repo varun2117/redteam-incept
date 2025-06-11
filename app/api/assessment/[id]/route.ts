@@ -88,7 +88,8 @@ export async function DELETE(
     const assessmentId = params.id
 
     // First check if assessment exists and belongs to the user
-    const assessment = await prisma.assessment.findFirst({
+    const prismaForDelete = getPrisma()
+    const assessment = await prismaForDelete.assessment.findFirst({
       where: {
         id: assessmentId,
         userId: session.user.id
@@ -100,7 +101,7 @@ export async function DELETE(
     }
 
     // Delete the assessment (this will cascade delete findings and exploitResults)
-    await prisma.assessment.delete({
+    await prismaForDelete.assessment.delete({
       where: { id: assessmentId }
     })
 
