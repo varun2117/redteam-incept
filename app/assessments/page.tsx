@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useSession } from 'next-auth/react'
 import Link from 'next/link'
 import { 
@@ -41,16 +41,23 @@ export default function Assessments() {
     }
   }, [session])
 
+  // Memoize running count to prevent unnecessary re-renders
+  const runningCount = useMemo(() => {
+    return assessments.filter(a => a.status === 'running').length
+  }, [assessments])
+
   // Separate effect for auto-refresh (only when there are running assessments)
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null
     
-    if (session && assessments.length > 0 && assessments.some(a => a.status === 'running')) {
-      console.log('Setting up auto-refresh for running assessments')
+    if (session && runningCount > 0) {
+      console.log('Setting up auto-refresh for', runningCount, 'running assessments')
       interval = setInterval(() => {
         console.log('Auto-refreshing assessments...')
         fetchAssessments()
       }, 5000)
+    } else {
+      console.log('No running assessments, auto-refresh disabled')
     }
     
     return () => {
@@ -59,20 +66,17 @@ export default function Assessments() {
         clearInterval(interval)
       }
     }
-  }, [session, assessments.filter(a => a.status === 'running').length])
+  }, [session, runningCount])
 
   // Show info about running assessments when page loads
   useEffect(() => {
-    if (assessments.length > 0) {
-      const runningCount = assessments.filter(a => a.status === 'running').length
-      if (runningCount > 0) {
-        toast(`${runningCount} assessment${runningCount > 1 ? 's' : ''} currently running.`, {
-          icon: '⏳',
-          duration: 3000
-        })
-      }
+    if (assessments.length > 0 && runningCount > 0) {
+      toast(`${runningCount} assessment${runningCount > 1 ? 's' : ''} currently running.`, {
+        icon: '⏳',
+        duration: 3000
+      })
     }
-  }, [assessments])
+  }, [runningCount]) // Only trigger when running count changes
 
   const fetchAssessments = async () => {
     try {
