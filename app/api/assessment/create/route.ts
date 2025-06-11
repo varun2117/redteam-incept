@@ -42,9 +42,9 @@ export async function POST(request: NextRequest) {
     })
     console.log('Assessment created with ID:', assessment.id)
 
-    // Start assessment via backend
-    console.log('Starting backend assessment...')
-    startBackendAssessment(
+    // Start assessment via local API
+    console.log('Starting assessment via local API...')
+    startLocalAssessment(
       assessment.id,
       targetName, 
       targetDescription || '', 
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
       openrouterApiKey, 
       selectedModel
     ).catch(error => {
-      console.error('Backend assessment error:', error)
+      console.error('Assessment error:', error)
       // Update assessment to failed status
       prisma.assessment.update({
         where: { id: assessment.id },
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function startBackendAssessment(
+async function startLocalAssessment(
   assessmentId: string,
   targetName: string,
   targetDescription: string,
@@ -83,12 +83,9 @@ async function startBackendAssessment(
   selectedModel: string
 ) {
   try {
-    console.log(`Starting real assessment for ${assessmentId}`)
+    console.log(`Starting assessment for ${assessmentId}`)
     
-    // Make request to backend assessment API
-    const backendUrl = process.env.BACKEND_URL || 'http://localhost:3001'
-    const assessmentUrl = `${backendUrl}/api/assessment/start`
-    
+    // Make request to local assessment API
     const assessmentRequest = {
       targetName,
       targetDescription,
@@ -97,9 +94,9 @@ async function startBackendAssessment(
       selectedModel
     }
     
-    console.log(`Making request to backend: ${assessmentUrl}`)
+    console.log(`Making request to local assessment API`)
     
-    const response = await fetch(assessmentUrl, {
+    const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/assessment/start`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -108,32 +105,33 @@ async function startBackendAssessment(
     })
     
     if (!response.ok) {
-      throw new Error(`Backend request failed: ${response.status} ${response.statusText}`)
+      throw new Error(`Assessment request failed: ${response.status} ${response.statusText}`)
     }
     
     const result = await response.json()
-    console.log('Backend response:', result)
+    console.log('Assessment response:', result)
     
     if (!result.success) {
-      throw new Error(`Backend assessment failed: ${result.message}`)
+      throw new Error(`Assessment failed: ${result.message}`)
     }
     
-    const backendAssessmentId = result.assessmentId
-    console.log(`Backend assessment started with ID: ${backendAssessmentId}`)
+    const localAssessmentId = result.assessmentId
+    console.log(`Assessment started with ID: ${localAssessmentId}`)
     
-    // Update our assessment with backend ID for tracking
+    // Update our assessment with the correct ID
     await prisma.assessment.update({
       where: { id: assessmentId },
       data: {
+        id: localAssessmentId,
         status: 'running'
       }
     })
     
-    // Poll backend for completion
-    pollBackendAssessment(assessmentId, backendAssessmentId, backendUrl)
+    // Poll for completion
+    pollLocalAssessment(localAssessmentId)
     
   } catch (error) {
-    console.error(`Error starting backend assessment for ${assessmentId}:`, error)
+    console.error(`Error starting assessment for ${assessmentId}:`, error)
     
     // Mark assessment as failed
     await prisma.assessment.update({
@@ -145,23 +143,19 @@ async function startBackendAssessment(
   }
 }
 
-async function pollBackendAssessment(
-  assessmentId: string, 
-  backendAssessmentId: string, 
-  backendUrl: string
-) {
-  const maxPolls = 60 // 5 minutes max (5-second intervals)
+async function pollLocalAssessment(assessmentId: string) {
+  const maxPolls = 120 // 10 minutes max (5-second intervals)
   let pollCount = 0
   
   const poll = async () => {
     try {
       pollCount++
-      console.log(`Polling backend assessment ${backendAssessmentId} (attempt ${pollCount}/${maxPolls})`)
+      console.log(`Polling assessment ${assessmentId} (attempt ${pollCount}/${maxPolls})`)
       
-      const response = await fetch(`${backendUrl}/api/assessment/${backendAssessmentId}/status`)
+      const response = await fetch(`${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/api/assessment/start?id=${assessmentId}`)
       
       if (!response.ok) {
-        throw new Error(`Backend poll failed: ${response.status}`)
+        throw new Error(`Assessment poll failed: ${response.status}`)
       }
       
       const result = await response.json()
@@ -170,64 +164,11 @@ async function pollBackendAssessment(
         const assessment = result.assessment
         
         if (assessment.status === 'completed') {
-          console.log(`Backend assessment ${backendAssessmentId} completed!`)
-          
-          // Update our database with real results
-          await prisma.assessment.update({
-            where: { id: assessmentId },
-            data: {
-              status: 'completed',
-              totalTests: assessment.totalTests || 0,
-              vulnerabilities: assessment.vulnerabilities || 0,
-              securityScore: assessment.securityScore || 0,
-              systemAnalysis: assessment.systemAnalysis ? JSON.stringify(assessment.systemAnalysis) : null
-            }
-          })
-          
-          // Save findings if available
-          if (assessment.findings && assessment.findings.length > 0) {
-            const findingData = assessment.findings.map((finding: any) => ({
-              assessmentId,
-              vector: finding.testType || 'unknown',
-              prompt: finding.payload || '',
-              response: finding.response || '',
-              technique: finding.technique || '',
-              vulnerable: finding.vulnerable || false,
-              vulnerabilityType: finding.vulnerabilityType || 'Unknown',
-              severity: finding.severity || 'Low',
-              explanation: finding.description || '',
-              recommendations: finding.recommendation || ''
-            }))
-            
-            await prisma.finding.createMany({ data: findingData })
-          }
-          
-          // Save exploit results if available
-          if (assessment.exploitResults && assessment.exploitResults.length > 0) {
-            const exploitData = assessment.exploitResults.map((exploit: any) => ({
-              assessmentId,
-              exploitType: exploit.exploitType || 'unknown',
-              success: exploit.success || false,
-              description: exploit.description || '',
-              payload: exploit.payload || '',
-              response: exploit.response || '',
-              riskLevel: exploit.riskLevel || 'low',
-              impact: exploit.impact || ''
-            }))
-            
-            await prisma.exploitResult.createMany({ data: exploitData })
-          }
-          
-          console.log(`Assessment ${assessmentId} completed successfully`)
+          console.log(`Assessment ${assessmentId} completed!`)
           return
           
         } else if (assessment.status === 'failed') {
-          console.log(`Backend assessment ${backendAssessmentId} failed`)
-          
-          await prisma.assessment.update({
-            where: { id: assessmentId },
-            data: { status: 'failed' }
-          })
+          console.log(`Assessment ${assessmentId} failed`)
           return
         }
         
@@ -235,19 +176,19 @@ async function pollBackendAssessment(
         if (pollCount < maxPolls) {
           setTimeout(poll, 5000) // Poll every 5 seconds
         } else {
-          console.log(`Backend assessment ${backendAssessmentId} timed out`)
+          console.log(`Assessment ${assessmentId} timed out`)
           await prisma.assessment.update({
             where: { id: assessmentId },
             data: { status: 'failed' }
-          })
+          }).catch(console.error)
         }
         
       } else {
-        throw new Error('Invalid response from backend')
+        throw new Error('Invalid response from assessment API')
       }
       
     } catch (error) {
-      console.error(`Error polling backend assessment ${backendAssessmentId}:`, error)
+      console.error(`Error polling assessment ${assessmentId}:`, error)
       
       if (pollCount < maxPolls) {
         setTimeout(poll, 5000) // Retry
@@ -255,7 +196,7 @@ async function pollBackendAssessment(
         await prisma.assessment.update({
           where: { id: assessmentId },
           data: { status: 'failed' }
-        })
+        }).catch(console.error)
       }
     }
   }
