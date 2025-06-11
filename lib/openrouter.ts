@@ -1,3 +1,5 @@
+import { getLangfuseClient, LangfuseGenerationData } from './langfuse'
+
 export interface OpenRouterMessage {
   role: 'system' | 'user' | 'assistant'
   content: string
@@ -26,6 +28,7 @@ export interface OpenRouterResponse {
 export class OpenRouterClient {
   private apiKey: string
   private baseUrl = 'https://openrouter.ai/api/v1'
+  private langfuse = getLangfuseClient()
 
   constructor(apiKey: string) {
     this.apiKey = apiKey
@@ -36,37 +39,125 @@ export class OpenRouterClient {
     messages,
     temperature = 0.7,
     max_tokens = 2000,
-    response_format
+    response_format,
+    traceId,
+    traceName = 'openrouter-chat-completion',
+    userId,
+    sessionId,
+    metadata = {}
   }: {
     model?: string
     messages: OpenRouterMessage[]
     temperature?: number
     max_tokens?: number
     response_format?: { type: 'json_object' }
+    traceId?: string
+    traceName?: string
+    userId?: string
+    sessionId?: string
+    metadata?: Record<string, any>
   }): Promise<OpenRouterResponse> {
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.NEXTAUTH_URL || 'http://localhost:3000',
-        'X-Title': 'LLM Red Team Agent'
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature,
-        max_tokens,
-        ...(response_format && { response_format })
+    const startTime = Date.now()
+    
+    // Create Langfuse trace and generation if available
+    let trace = null
+    let generation = null
+    
+    if (this.langfuse) {
+      trace = this.langfuse.trace({
+        id: traceId,
+        name: traceName,
+        userId,
+        sessionId,
+        metadata: {
+          ...metadata,
+          model,
+          temperature,
+          max_tokens,
+          response_format: response_format?.type || 'text'
+        }
       })
-    })
-
-    if (!response.ok) {
-      const error = await response.text()
-      throw new Error(`OpenRouter API error: ${response.status} ${error}`)
+      
+      generation = trace.generation({
+        name: 'openrouter-completion',
+        model,
+        input: messages,
+        metadata: {
+          temperature,
+          max_tokens,
+          response_format: response_format?.type || 'text',
+          provider: 'openrouter'
+        }
+      })
     }
 
-    return response.json()
+    try {
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.NEXTAUTH_URL || 'http://localhost:3000',
+          'X-Title': 'LLM Red Team Agent'
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature,
+          max_tokens,
+          ...(response_format && { response_format })
+        })
+      })
+
+      if (!response.ok) {
+        const error = await response.text()
+        const errorMessage = `OpenRouter API error: ${response.status} ${error}`
+        
+        // Log error to Langfuse if available
+        if (generation) {
+          generation.end({
+            output: { error: errorMessage },
+            level: 'ERROR'
+          })
+        }
+        
+        throw new Error(errorMessage)
+      }
+
+      const result: OpenRouterResponse = await response.json()
+      
+      // Log successful completion to Langfuse if available
+      if (generation && result.usage) {
+        generation.end({
+          output: result.choices[0]?.message,
+          usage: {
+            promptTokens: result.usage.prompt_tokens,
+            completionTokens: result.usage.completion_tokens,
+            totalTokens: result.usage.total_tokens
+          },
+          metadata: {
+            responseId: result.id,
+            finishReason: result.choices[0]?.finish_reason,
+            latencyMs: Date.now() - startTime
+          }
+        })
+      }
+
+      return result
+    } catch (error) {
+      // Log error to Langfuse if available
+      if (generation) {
+        generation.end({
+          output: { error: error instanceof Error ? error.message : String(error) },
+          level: 'ERROR',
+          metadata: {
+            latencyMs: Date.now() - startTime
+          }
+        })
+      }
+      
+      throw error
+    }
   }
 
   async getAvailableModels() {
@@ -147,7 +238,15 @@ Provide your analysis in JSON format with the following fields:
           { role: 'user', content: analysisPrompt }
         ],
         response_format: { type: 'json_object' },
-        temperature: 0.3
+        temperature: 0.3,
+        traceName: 'red-team-discovery',
+        sessionId: this.testSession,
+        metadata: {
+          operation: 'target_system_discovery',
+          targetName: this.targetName,
+          runId: this.runId,
+          promptCount: prompts.length
+        }
       })
 
       return JSON.parse(response.choices[0].message.content)
@@ -203,7 +302,16 @@ Format your response as a JSON array of test case objects with these fields:
           { role: 'user', content: generationPrompt }
         ],
         response_format: { type: 'json_object' },
-        temperature: 0.9
+        temperature: 0.9,
+        traceName: 'red-team-test-generation',
+        sessionId: this.testSession,
+        metadata: {
+          operation: 'test_case_generation',
+          attackVector: vector,
+          targetName: this.targetName,
+          runId: this.runId,
+          numCases: numCases
+        }
       })
 
       const result = JSON.parse(response.choices[0].message.content)
@@ -256,7 +364,16 @@ Format your response as a JSON object with these fields:
           { role: 'user', content: analysisPrompt }
         ],
         response_format: { type: 'json_object' },
-        temperature: 0.3
+        temperature: 0.3,
+        traceName: 'red-team-vulnerability-analysis',
+        sessionId: this.testSession,
+        metadata: {
+          operation: 'vulnerability_analysis',
+          attackVector: vector,
+          targetName: this.targetName,
+          runId: this.runId,
+          testTechnique: testCase.technique || 'unknown'
+        }
       })
 
       const analysis = JSON.parse(analysisResponse.choices[0].message.content)

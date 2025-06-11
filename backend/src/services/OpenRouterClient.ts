@@ -1,4 +1,5 @@
 import axios, { AxiosResponse } from 'axios';
+import { getLangfuseClient } from '../lib/langfuse';
 
 export interface OpenRouterMessage {
   role: 'system' | 'user' | 'assistant';
@@ -28,6 +29,7 @@ export interface OpenRouterResponse {
 export class OpenRouterClient {
   private apiKey: string;
   private baseUrl = 'https://openrouter.ai/api/v1';
+  private langfuse = getLangfuseClient();
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -39,14 +41,60 @@ export class OpenRouterClient {
     messages,
     temperature = 0.7,
     max_tokens = 2000,
-    response_format
+    response_format,
+    traceId,
+    traceName = 'backend-openrouter-chat-completion',
+    userId,
+    sessionId,
+    metadata = {}
   }: {
     model?: string;
     messages: OpenRouterMessage[];
     temperature?: number;
     max_tokens?: number;
     response_format?: { type: 'json_object' };
+    traceId?: string;
+    traceName?: string;
+    userId?: string;
+    sessionId?: string;
+    metadata?: Record<string, any>;
   }): Promise<OpenRouterResponse> {
+    const startTime = Date.now();
+    
+    // Create Langfuse trace and generation if available
+    let trace = null;
+    let generation = null;
+    
+    if (this.langfuse) {
+      trace = this.langfuse.trace({
+        id: traceId,
+        name: traceName,
+        userId,
+        sessionId,
+        metadata: {
+          ...metadata,
+          model,
+          temperature,
+          max_tokens,
+          response_format: response_format?.type || 'text',
+          backend: true
+        }
+      });
+      
+      generation = trace.generation({
+        name: 'backend-openrouter-completion',
+        model,
+        input: messages,
+        metadata: {
+          temperature,
+          max_tokens,
+          response_format: response_format?.type || 'text',
+          provider: 'openrouter',
+          backend: true
+        }
+      });
+    }
+
     try {
       const response: AxiosResponse = await axios.post(
         `${this.baseUrl}/chat/completions`,
@@ -68,8 +116,38 @@ export class OpenRouterClient {
         }
       );
 
-      return response.data;
+      const result: OpenRouterResponse = response.data;
+      
+      // Log successful completion to Langfuse if available
+      if (generation && result.usage) {
+        generation.end({
+          output: result.choices[0]?.message,
+          usage: {
+            promptTokens: result.usage.prompt_tokens,
+            completionTokens: result.usage.completion_tokens,
+            totalTokens: result.usage.total_tokens
+          },
+          metadata: {
+            responseId: result.id,
+            finishReason: result.choices[0]?.finish_reason,
+            latencyMs: Date.now() - startTime
+          }
+        });
+      }
+
+      return result;
     } catch (error) {
+      // Log error to Langfuse if available
+      if (generation) {
+        generation.end({
+          output: { error: error instanceof Error ? error.message : String(error) },
+          level: 'ERROR',
+          metadata: {
+            latencyMs: Date.now() - startTime
+          }
+        });
+      }
+
       if (axios.isAxiosError(error)) {
         const status = error.response?.status;
         const message = error.response?.data?.error?.message || error.message;
