@@ -220,17 +220,23 @@ export default function AssessmentDetails() {
           throw new Error('Failed to get JSON report')
         }
       } else {
-        // For HTML and text, try fetch first to check if report exists
+        // For HTML and text, download the file directly
         console.log(`Attempting to export ${format} report for assessment ${assessment.id}`)
         const reportResponse = await fetch(`/api/assessment/${assessment.id}/report?format=${format}`)
         
         if (reportResponse.ok) {
+          // Check content type to ensure we got the right format
+          const contentType = reportResponse.headers.get('content-type')
+          console.log(`Response content type: ${contentType}`)
+          
           const blob = await reportResponse.blob()
           const url = URL.createObjectURL(blob)
           const link = document.createElement('a')
           link.href = url
           link.download = `vulnerability-report-${assessment.id}.${format === 'html' ? 'html' : 'txt'}`
+          document.body.appendChild(link) // Ensure link is in DOM
           link.click()
+          document.body.removeChild(link) // Clean up
           URL.revokeObjectURL(url)
           toast.success(`Report exported as ${format.toUpperCase()}`)
         } else {
@@ -366,19 +372,28 @@ export default function AssessmentDetails() {
                     <div id="export-dropdown" className="hidden absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 rounded-md shadow-lg z-10 border border-gray-200 dark:border-gray-700">
                       <div className="py-1">
                         <button
-                          onClick={() => exportResults('html')}
+                          onClick={() => {
+                            exportResults('html')
+                            document.getElementById('export-dropdown')?.classList.add('hidden')
+                          }}
                           className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 w-full text-left"
                         >
                           Export as HTML
                         </button>
                         <button
-                          onClick={() => exportResults('text')}
+                          onClick={() => {
+                            exportResults('text')
+                            document.getElementById('export-dropdown')?.classList.add('hidden')
+                          }}
                           className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 w-full text-left"
                         >
                           Export as Text
                         </button>
                         <button
-                          onClick={() => exportResults('json')}
+                          onClick={() => {
+                            exportResults('json')
+                            document.getElementById('export-dropdown')?.classList.add('hidden')
+                          }}
                           className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 w-full text-left"
                         >
                           Export as JSON

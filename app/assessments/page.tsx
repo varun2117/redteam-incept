@@ -66,9 +66,9 @@ export default function Assessments() {
     if (assessments.length > 0) {
       const runningCount = assessments.filter(a => a.status === 'running').length
       if (runningCount > 0) {
-        toast(`${runningCount} assessment${runningCount > 1 ? 's' : ''} currently running. This page will auto-refresh.`, {
-          icon: '🔄',
-          duration: 4000
+        toast(`${runningCount} assessment${runningCount > 1 ? 's' : ''} currently running.`, {
+          icon: '⏳',
+          duration: 3000
         })
       }
     }

@@ -72,18 +72,22 @@ export async function GET(
       case 'html':
         const htmlReport = generateHtmlReport(report)
         return new NextResponse(htmlReport, {
+          status: 200,
           headers: {
-            'Content-Type': 'text/html',
-            'Content-Disposition': `attachment; filename="vulnerability-report-${assessmentId}.html"`
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Disposition': `attachment; filename="vulnerability-report-${assessmentId}.html"`,
+            'Cache-Control': 'no-cache'
           }
         })
         
       case 'text':
         const textReport = generateTextReport(report)
         return new NextResponse(textReport, {
+          status: 200,
           headers: {
-            'Content-Type': 'text/plain',
-            'Content-Disposition': `attachment; filename="vulnerability-report-${assessmentId}.txt"`
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Content-Disposition': `attachment; filename="vulnerability-report-${assessmentId}.txt"`,
+            'Cache-Control': 'no-cache'
           }
         })
         
