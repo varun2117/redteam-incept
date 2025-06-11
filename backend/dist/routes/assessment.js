@@ -268,6 +268,12 @@ router.post('/test-connection', async (req, res) => {
     }
 });
 /**
+ * Test route for debugging
+ */
+router.get('/:id/test', (req, res) => {
+    res.json({ message: `Test route works for assessment ${req.params.id}` });
+});
+/**
  * Get vulnerability report for an assessment
  */
 router.get('/:id/report', async (req, res) => {
@@ -293,9 +299,14 @@ router.get('/:id/report', async (req, res) => {
             });
             if (!dbAssessment) {
                 console.log(`❌ Assessment ${id} not found in database`);
+                // Debug: Return what we tried to query
                 return res.status(404).json({
                     success: false,
-                    message: 'Assessment not found'
+                    message: 'Assessment not found',
+                    debug: {
+                        searchedId: id,
+                        databasePath: process.env.DATABASE_URL
+                    }
                 });
             }
             console.log(`📂 Assessment ${id} found in database, status: ${dbAssessment.status}`);

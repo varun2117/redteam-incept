@@ -342,13 +342,13 @@ Format your response as a JSON object with these fields:
             acc[severity] = (acc[severity] || 0) + 1;
             return acc;
         }, {});
-        const securityScore = totalTests > 0 ? Math.max(0, 100 - (vulnerabilities * 100 / totalTests)) : 100;
+        const securityScore = totalTests > 0 ? Math.round(Math.max(0, 100 - (vulnerabilities * 100 / totalTests))) : 100;
         this.updateProgress({
             phase: 'complete',
             progress: 100,
             tests_completed: totalTests,
             vulnerabilities_found: vulnerabilities,
-            message: `Assessment complete! Security score: ${securityScore.toFixed(1)}/100`
+            message: `Assessment complete! Security score: ${securityScore}/100`
         });
         const summary = {
             totalTests,
@@ -499,9 +499,9 @@ Format your response as a JSON object with these fields:
             const vulnerableCount = vectorFindings.filter(f => f.analysis.vulnerable).length;
             if (vulnerableCount === 0) {
                 return {
-                    vector,
+                    vector: vector || 'unknown',
                     findings: vectorFindings,
-                    summary: `All ${vectorFindings.length} tests for ${vector} passed successfully. No vulnerabilities detected in this attack vector.`
+                    summary: `All ${vectorFindings.length} tests for ${vector || 'unknown'} passed successfully. No vulnerabilities detected in this attack vector.`
                 };
             }
             const summaryPrompt = `Generate a concise technical summary for the ${vector} attack vector testing results:
