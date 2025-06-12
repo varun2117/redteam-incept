@@ -510,7 +510,7 @@ export default function AssessmentDetails() {
         </div>
 
         {/* Intelligent Features Display */}
-        {(safeData.intelligentFeatures.customAttackVectors > 0 || safeData.intelligentFeatures.roleSpecificTests > 0) && (
+        {((safeData.intelligentFeatures.customAttackVectors || 0) > 0 || (safeData.intelligentFeatures.roleSpecificTests || 0) > 0) && (
           <div className="bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900 dark:to-purple-900 rounded-lg shadow-md p-6 mb-8 border border-blue-200 dark:border-blue-700">
             <div className="flex items-center space-x-3 mb-4">
               <Brain className="h-6 w-6 text-blue-600" />
@@ -522,7 +522,7 @@ export default function AssessmentDetails() {
                   <Zap className="h-5 w-5 text-yellow-600" />
                   <span className="font-medium text-gray-900 dark:text-gray-100">Custom Attack Vectors</span>
                 </div>
-                <div className="text-2xl font-bold text-blue-600">{safeData.intelligentFeatures.customAttackVectors}</div>
+                <div className="text-2xl font-bold text-blue-600">{safeData.intelligentFeatures.customAttackVectors || 0}</div>
                 <div className="text-sm text-gray-600 dark:text-gray-300">AI-generated attacks tailored to target</div>
               </div>
               <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border border-blue-200 dark:border-blue-600">
@@ -539,10 +539,10 @@ export default function AssessmentDetails() {
                   <span className="font-medium text-gray-900 dark:text-gray-100">Adaptive Analysis</span>
                 </div>
                 <div className="text-2xl font-bold text-purple-600">
-                  {safeData.intelligentFeatures.adaptiveAnalysis ? '✅' : '❌'}
+                  {(safeData.intelligentFeatures.adaptiveAnalysis || false) ? '✅' : '❌'}
                 </div>
                 <div className="text-sm text-gray-600 dark:text-gray-300">
-                  {safeData.intelligentFeatures.adaptiveAnalysis ? 'Target analyzed & customized' : 'Standard testing used'}
+                  {(safeData.intelligentFeatures.adaptiveAnalysis || false) ? 'Target analyzed & customized' : 'Standard testing used'}
                 </div>
               </div>
             </div>
