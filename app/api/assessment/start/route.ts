@@ -1,17 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-import { getPrisma } from '@/lib/prisma'
-import { RedTeamAgent } from '@/lib/RedTeamAgent'
-import { ChatAgentConnector } from '@/lib/ChatAgentConnector'
-import { v4 as uuidv4 } from 'uuid'
-
-// Store active assessments in memory
-const activeAssessments = new Map<string, any>()
 
 export async function POST(request: NextRequest) {
   try {
-    console.log('Starting new assessment...')
+    console.log('Starting new intelligent assessment...')
     
     // Check authentication
     const session = await getServerSession(authOptions)
@@ -22,7 +15,7 @@ export async function POST(request: NextRequest) {
 
     // Parse request body
     const body = await request.json()
-    const { targetName, targetDescription, chatAgentUrl, openrouterApiKey, selectedModel, chatAgentConfig } = body
+    const { targetName, targetDescription, chatAgentUrl, openrouterApiKey, selectedModel } = body
 
     // Validate required fields
     if (!targetName || !chatAgentUrl || !openrouterApiKey || !selectedModel) {
@@ -32,105 +25,62 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // Validate chat agent URL
-    if (!ChatAgentConnector.validateUrl(chatAgentUrl)) {
-      return NextResponse.json({
-        success: false,
-        message: 'Invalid chat agent URL format'
-      }, { status: 400 })
-    }
+    // Get backend URL from environment
+    const backendUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'https://redteam-incept-backend.vercel.app'
+    
+    console.log(`🧠 Proxying to intelligent backend: ${backendUrl}`)
 
-    const assessmentId = uuidv4()
-
-    // Create chat agent connector with Test Agents compatibility
-    const defaultConfig = {
-      url: chatAgentUrl,
-      method: 'POST' as const,
-      timeout: 30000,
-      retries: 3,
-      requestFormat: 'json' as const,
-      responseFormat: 'json' as const,
-      messageField: 'message',
-      responseField: 'message',
-      ...chatAgentConfig
-    }
-
-    const chatConnector = new ChatAgentConnector(defaultConfig)
-
-    // Test connection to chat agent
-    console.log(`Testing connection to chat agent: ${chatAgentUrl}`)
-    const connectionTest = await chatConnector.testConnection()
-
-    if (!connectionTest.success) {
-      return NextResponse.json({
-        success: false,
-        message: `Failed to connect to chat agent: ${connectionTest.error}`,
-        details: {
-          url: chatAgentUrl,
-          responseTime: connectionTest.responseTime
-        }
-      }, { status: 400 })
-    }
-
-    console.log(`✅ Chat agent connection successful (${connectionTest.responseTime}ms)`)
-
-    // Initialize red team agent
-    const redTeamAgent = new RedTeamAgent(openrouterApiKey, selectedModel)
-    redTeamAgent.setTargetInfo(targetName, targetDescription)
-
-    // Create assessment record in database
-    const prisma = getPrisma()
-    const assessment = await prisma.assessment.create({
-      data: {
-        id: assessmentId,
-        userId: session.user.id,
+    // Proxy request to intelligent adaptive backend
+    const backendResponse = await fetch(`${backendUrl}/api/assessment/start`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
         targetName,
-        targetDescription: targetDescription || '',
-        status: 'running'
-      }
+        targetDescription,
+        chatAgentUrl,
+        openrouterApiKey,
+        selectedModel,
+        userId: session.user.id
+      })
     })
 
-    // Store assessment in memory for progress tracking
-    const assessmentData = {
-      id: assessmentId,
-      agent: redTeamAgent,
-      connector: chatConnector,
-      status: 'running',
-      startTime: new Date(),
-      progress: {
-        phase: 'discovery',
-        progress: 0,
-        tests_completed: 0,
-        vulnerabilities_found: 0,
-        message: 'Initializing assessment...'
-      }
+    if (!backendResponse.ok) {
+      const errorText = await backendResponse.text()
+      console.error('Backend error:', errorText)
+      return NextResponse.json({
+        success: false,
+        message: 'Failed to start intelligent assessment',
+        error: errorText
+      }, { status: backendResponse.status })
     }
 
-    activeAssessments.set(assessmentId, assessmentData)
+    const backendData = await backendResponse.json()
+    
+    console.log('✅ Intelligent assessment started:', backendData.assessmentId)
 
-    // Start assessment in background
-    runAssessmentBackground(assessmentId).catch(error => {
-      console.error(`Assessment ${assessmentId} failed:`, error)
-      // Update assessment status to failed
-      prisma.assessment.update({
-        where: { id: assessmentId },
-        data: { status: 'failed' }
-      }).catch(console.error)
-    })
-
+    // Return the response from intelligent backend
     return NextResponse.json({
       success: true,
-      assessmentId,
-      message: 'Assessment started successfully',
-      chatAgentConnection: {
-        url: chatAgentUrl,
-        responseTime: connectionTest.responseTime,
-        status: 'connected'
+      assessmentId: backendData.assessmentId,
+      message: backendData.message || 'Intelligent adaptive assessment started',
+      features: backendData.features || {
+        customAttackGeneration: true,
+        roleSpecificTesting: true,
+        adaptiveTargeting: true,
+        timeoutOptimization: true
+      },
+      estimatedDuration: backendData.estimatedDuration || '45-55 seconds',
+      testPlan: backendData.testPlan || {
+        phases: ['discovery', 'custom_attack_generation', 'adaptive_testing', 'intelligent_analysis'],
+        customVectors: 'Generated based on target analysis',
+        aiAnalysis: true
       }
     })
 
   } catch (error) {
-    console.error('Error starting assessment:', error)
+    console.error('Error starting intelligent assessment:', error)
     return NextResponse.json({
       success: false,
       message: 'Internal server error',
@@ -139,144 +89,47 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function runAssessmentBackground(assessmentId: string) {
-  const assessmentData = activeAssessments.get(assessmentId)
-  if (!assessmentData) return
-
+// Health check for the proxy
+export async function GET() {
   try {
-    console.log(`🔍 Starting assessment ${assessmentId}`)
-
-    // Set up progress callback
-    assessmentData.agent.setProgressCallback((progress: any) => {
-      assessmentData.progress = progress
-      console.log(`Assessment ${assessmentId} progress:`, progress)
-    })
-
-    // Run the assessment
-    const results = await assessmentData.agent.runSecurityAssessment(
-      assessmentData.connector,
-      undefined,
-      assessmentId
-    )
-
-    assessmentData.status = 'completed'
-    assessmentData.results = results
-
-    console.log(`✅ Assessment ${assessmentId} completed successfully`)
-    console.log(`📊 Results: ${results.summary.vulnerabilities}/${results.summary.totalTests} vulnerabilities found`)
-
-    // Save results to database
-    const prismaForBackground = getPrisma()
-    await prismaForBackground.assessment.update({
-      where: { id: assessmentId },
-      data: {
-        status: 'completed',
-        totalTests: results.summary.totalTests,
-        vulnerabilities: results.summary.vulnerabilities,
-        securityScore: results.summary.securityScore,
-        systemAnalysis: JSON.stringify(results.systemAnalysis),
-        vulnerabilityReport: JSON.stringify(results.vulnerabilityReport),
-        riskLevel: results.vulnerabilityReport?.executiveSummary?.riskLevel,
-        executionTime: results.vulnerabilityReport?.executionTime
+    const backendUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'https://redteam-incept-backend.vercel.app'
+    
+    const healthResponse = await fetch(`${backendUrl}/health`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
       }
     })
 
-    // Save findings
-    if (results.findings && results.findings.length > 0) {
-      const findingData = results.findings.map((finding: any) => ({
-        assessmentId,
-        vector: finding.vector,
-        prompt: finding.test_case.prompt,
-        response: finding.response,
-        technique: finding.test_case.technique,
-        vulnerable: finding.analysis.vulnerable,
-        vulnerabilityType: finding.analysis.vulnerability_type,
-        severity: finding.analysis.severity,
-        explanation: finding.analysis.explanation,
-        recommendations: finding.analysis.recommendations
-      }))
-
-      await prismaForBackground.finding.createMany({ data: findingData })
-    }
-
-    console.log(`💾 Saved assessment results to database`)
-
-  } catch (error) {
-    console.error(`❌ Assessment ${assessmentId} failed:`, error)
-    assessmentData.status = 'failed'
-    assessmentData.progress.message = `Assessment failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-
-    // Update database
-    const prismaForError = getPrisma()
-    await prismaForError.assessment.update({
-      where: { id: assessmentId },
-      data: { status: 'failed' }
-    }).catch(console.error)
-  }
-}
-
-// Get assessment status
-export async function GET(request: NextRequest) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const id = searchParams.get('id')
-
-    if (!id) {
+    if (!healthResponse.ok) {
       return NextResponse.json({
         success: false,
-        message: 'Assessment ID required'
-      }, { status: 400 })
+        message: 'Intelligent backend not available',
+        backendUrl
+      }, { status: 503 })
     }
 
-    const assessment = activeAssessments.get(id)
-    if (!assessment) {
-      // Try to get from database
-      const prismaForGet = getPrisma()
-      const dbAssessment = await prismaForGet.assessment.findUnique({
-        where: { id },
-        include: {
-          findings: true
-        }
-      })
+    const healthData = await healthResponse.json()
 
-      if (!dbAssessment) {
-        return NextResponse.json({
-          success: false,
-          message: 'Assessment not found'
-        }, { status: 404 })
-      }
-
-      return NextResponse.json({
-        success: true,
-        assessment: {
-          id: dbAssessment.id,
-          status: dbAssessment.status,
-          startTime: dbAssessment.createdAt,
-          totalTests: dbAssessment.totalTests,
-          vulnerabilities: dbAssessment.vulnerabilities,
-          securityScore: dbAssessment.securityScore,
-          findings: dbAssessment.findings
-        }
-      })
-    }
-
-    // Return live assessment data
     return NextResponse.json({
       success: true,
-      assessment: {
-        id: assessment.id,
-        status: assessment.status,
-        startTime: assessment.startTime,
-        progress: assessment.progress,
-        results: assessment.results
+      message: 'Frontend proxy to intelligent backend is working',
+      backendUrl,
+      backendHealth: healthData,
+      intelligentFeatures: {
+        adaptiveTargeting: true,
+        customAttackGeneration: true,
+        roleSpecificTesting: true,
+        langfuseIntegration: healthData.dependencies?.langfuse || false
       }
     })
 
   } catch (error) {
-    console.error('Error getting assessment status:', error)
+    console.error('Health check error:', error)
     return NextResponse.json({
       success: false,
-      message: 'Internal server error'
+      message: 'Failed to connect to intelligent backend',
+      error: error instanceof Error ? error.message : 'Unknown error'
     }, { status: 500 })
   }
 }

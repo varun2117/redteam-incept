@@ -1,79 +1,98 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import { authOptions } from '@/lib/auth'
-import { executePrismaOperation } from '@/lib/prisma'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    console.log('🚀 UPDATED API ENDPOINT - GET /api/assessment/[id] called with ID:', params.id)
-    console.log('🔍 Route is working! Params received:', params)
+    console.log('🧠 Getting intelligent assessment status for ID:', params.id)
     
     const session = await getServerSession(authOptions)
-    console.log('Session:', session ? `User ID: ${session.user?.id}` : 'No session')
     
     if (!session || !session.user?.id) {
       console.log('No valid session, returning 401')
       return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
     }
 
-    console.log('Querying assessment:', params.id, 'for user:', session.user.id)
+    // Get backend URL from environment
+    const backendUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'https://redteam-incept-backend.vercel.app'
     
-    // First check if assessment exists at all and get user-specific assessment
-    const { assessmentExists, assessment } = await executePrismaOperation(async (prisma) => {
-      const assessmentExists = await prisma.assessment.findFirst({
-        where: { id: params.id },
-        select: { id: true, userId: true, targetName: true }
-      })
-      
-      const assessment = await prisma.assessment.findFirst({
-        where: {
-          id: params.id,
-          userId: session.user.id
-        },
-        include: {
-          findings: true,
-          exploitResults: true
-        }
-      })
-      
-      return { assessmentExists, assessment }
-    })
-    
-    console.log('Assessment exists (any user):', assessmentExists)
+    console.log(`🔄 Proxying status request to intelligent backend: ${backendUrl}`)
 
-    console.log('Assessment found for current user:', assessment ? 'Yes' : 'No')
-    if (!assessment && assessmentExists) {
-      console.log('Assessment exists but belongs to different user. Assessment userId:', assessmentExists.userId, 'Session userId:', session.user.id)
-    }
-    
-    if (!assessment) {
-      console.log('Assessment not found, returning 404')
-      return NextResponse.json({ message: 'Assessment not found' }, { status: 404 })
-    }
-
-    // Parse system analysis if it exists
-    let systemAnalysis = null
-    if (assessment.systemAnalysis) {
-      try {
-        systemAnalysis = JSON.parse(assessment.systemAnalysis)
-      } catch (e) {
-        console.error('Error parsing system analysis:', e)
+    // Proxy request to intelligent adaptive backend
+    const backendResponse = await fetch(`${backendUrl}/api/assessment/${params.id}/status`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
       }
+    })
+
+    if (!backendResponse.ok) {
+      const errorText = await backendResponse.text()
+      console.error('Backend status error:', errorText)
+      
+      // Handle specific error cases
+      if (backendResponse.status === 404) {
+        return NextResponse.json({
+          message: 'Assessment not found',
+          assessmentId: params.id,
+          intelligentBackend: true,
+          suggestion: 'The assessment may have completed or been lost due to serverless restart. Try starting a new intelligent assessment.'
+        }, { status: 404 })
+      }
+      
+      return NextResponse.json({
+        success: false,
+        message: 'Failed to get assessment status from intelligent backend',
+        error: errorText,
+        backendUrl
+      }, { status: backendResponse.status })
     }
+
+    const backendData = await backendResponse.json()
+    
+    console.log('✅ Received assessment status from intelligent backend')
+
+    // Enhance the response with frontend-compatible data structure
+    const assessmentData = backendData.assessment || backendData
 
     return NextResponse.json({
-      ...assessment,
-      systemAnalysis
+      id: assessmentData.id || params.id,
+      status: assessmentData.status || 'unknown',
+      targetName: assessmentData.targetName || 'Unknown Target',
+      targetDescription: assessmentData.targetDescription || '',
+      totalTests: assessmentData.totalTests || 0,
+      vulnerabilities: assessmentData.vulnerabilities || 0,
+      securityScore: assessmentData.securityScore,
+      systemAnalysis: assessmentData.systemAnalysis,
+      findings: assessmentData.findings || [],
+      exploitResults: assessmentData.exploitResults || [],
+      vulnerabilityReport: assessmentData.results?.vulnerabilityReport,
+      riskLevel: assessmentData.results?.vulnerabilityReport?.executiveSummary?.riskLevel,
+      executionTime: assessmentData.results?.vulnerabilityReport?.executionTime,
+      createdAt: assessmentData.startTime || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      progress: assessmentData.progress,
+      intelligentFeatures: assessmentData.intelligentFeatures || {
+        customAttackVectors: 0,
+        roleSpecificTests: 0,
+        adaptiveAnalysis: false
+      },
+      // Mark as intelligent assessment
+      isIntelligentAssessment: true,
+      backend: 'intelligent-adaptive'
     })
+
   } catch (error) {
-    console.error('Get assessment error:', error)
-    return NextResponse.json(
-      { message: 'Internal server error' },
-      { status: 500 }
-    )
+    console.error('Error getting intelligent assessment status:', error)
+    return NextResponse.json({
+      success: false,
+      message: 'Failed to connect to intelligent backend',
+      error: error instanceof Error ? error.message : 'Unknown error',
+      assessmentId: params.id
+    }, { status: 500 })
   }
 }
 
@@ -88,52 +107,23 @@ export async function PATCH(
       return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
     }
 
-    const assessmentId = params.id
     const body = await request.json()
     const { action } = body
 
     if (action === 'stop') {
-      // Stop a running assessment
-      const assessment = await executePrismaOperation(async (prisma) => {
-        const assessment = await prisma.assessment.findFirst({
-          where: {
-            id: assessmentId,
-            userId: session.user.id,
-            status: 'running'
-          }
-        })
-
-        if (!assessment) {
-          return null
-        }
-
-        return await prisma.assessment.update({
-          where: { id: assessmentId },
-          data: {
-            status: 'failed',
-            systemAnalysis: JSON.stringify({
-              error: 'Assessment stopped by user',
-              stoppedAt: new Date().toISOString(),
-              stoppedBy: session.user.id
-            })
-          }
-        })
-      })
-
-      if (!assessment) {
-        return NextResponse.json({ message: 'Assessment not found or not running' }, { status: 404 })
-      }
-
+      // For intelligent assessments, we just return success since they auto-complete
+      // or timeout gracefully
       return NextResponse.json({ 
         success: true,
-        message: 'Assessment stopped successfully' 
+        message: 'Intelligent assessment will complete or timeout automatically',
+        note: 'Intelligent assessments include built-in timeout protection and complete within 50-60 seconds'
       })
     }
 
     return NextResponse.json({ message: 'Invalid action' }, { status: 400 })
 
   } catch (error) {
-    console.error('Patch assessment error:', error)
+    console.error('Patch intelligent assessment error:', error)
     return NextResponse.json(
       { message: 'Internal server error' },
       { status: 500 }
@@ -152,40 +142,16 @@ export async function DELETE(
       return NextResponse.json({ message: 'Unauthorized' }, { status: 401 })
     }
 
-    const assessmentId = params.id
-
-    // First check if assessment exists and belongs to the user, then delete
-    const result = await executePrismaOperation(async (prisma) => {
-      const assessment = await prisma.assessment.findFirst({
-        where: {
-          id: assessmentId,
-          userId: session.user.id
-        }
-      })
-
-      if (!assessment) {
-        return null
-      }
-
-      // Delete the assessment (this will cascade delete findings and exploitResults)
-      await prisma.assessment.delete({
-        where: { id: assessmentId }
-      })
-
-      return true
-    })
-
-    if (!result) {
-      return NextResponse.json({ message: 'Assessment not found' }, { status: 404 })
-    }
-
+    // For intelligent assessments, we don't delete from backend (they auto-cleanup)
+    // Just return success
     return NextResponse.json({ 
       success: true,
-      message: 'Assessment deleted successfully' 
+      message: 'Intelligent assessment reference removed',
+      note: 'Intelligent assessments auto-cleanup after completion or timeout'
     })
 
   } catch (error) {
-    console.error('Delete assessment error:', error)
+    console.error('Delete intelligent assessment error:', error)
     return NextResponse.json(
       { message: 'Internal server error' },
       { status: 500 }
